@@ -1,0 +1,87 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id          String    @id @default(cuid())
+  phoneNumber String    @unique
+  fullName    String
+  email       String?
+  role        String    @default("DRIVER")
+  createdAt   DateTime  @default(now())
+  vehicles    Vehicle[]
+  listings    Listing[]
+}
+
+model Vehicle {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  licensePlate String
+  type         String   // TWO_WHEELER, HATCHBACK, SEDAN, SUV
+  makeModel    String
+  createdAt    DateTime @default(now())
+}
+
+model Listing {
+  id                 String    @id @default(cuid())
+  hostId             String
+  host               User      @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  hostName           String
+  hostPhone          String
+  title              String
+  description        String
+  category           String    // RESIDENTIAL_DRIVEWAY, GATED_SOCIETY, COMMERCIAL_BASEMENT, VACANT_PLOT
+  address            String
+  city               String    // Bengaluru, Pune, Mumbai, Delhi NCR
+  locality           String
+  landmark           String
+  lat                Float
+  lng                Float
+  hourlyRate         Float
+  dailyRate          Float
+  capacity           Int       @default(1)
+  supportedVehicles  String    // JSON array of strings
+  amenities          String    // JSON array of strings
+  cancellationPolicy String    @default("FLEXIBLE")
+  isActive           Boolean   @default(true)
+  societyName        String?
+  flatNo             String?
+  gateInstructions   String
+  images             String    // JSON array of URLs
+  rating             Float     @default(5.0)
+  reviewCount        Int       @default(0)
+  createdAt          DateTime  @default(now())
+  bookings           Booking[]
+}
+
+model Booking {
+  id               String    @id
+  listingId        String
+  listing          Listing   @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  driverId         String
+  driverName       String
+  driverPhone      String
+  vehiclePlate     String
+  vehicleType      String
+  vehicleModel     String
+  startTime        DateTime
+  endTime          DateTime
+  actualCheckin    DateTime?
+  actualCheckout   DateTime?
+  hours            Int
+  baseFare         Float
+  convenienceFee   Float
+  gstOnFee         Float
+  totalAmount      Float
+  hostPayout       Float
+  status           String    @default("CONFIRMED")
+  gatePassCode     String
+  paymentMethod    String    @default("UPI")
+  createdAt        DateTime  @default(now())
+}

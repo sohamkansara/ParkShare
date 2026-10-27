@@ -2,7 +2,31 @@
 
 A peer-to-peer and commercial parking space marketplace tailored for high-density Indian urban centers (Bengaluru, Pune, Mumbai, Delhi NCR).
 
-Built with **Next.js 14 (App Router)**, **TypeScript**, **Tailwind CSS**, and **Leaflet (OpenStreetMap)**.
+Built with a **Python (FastAPI + SQLAlchemy)** backend and a **Next.js 14 + Tailwind CSS + Leaflet** interactive frontend.
+
+---
+
+## 🏗️ Architecture
+
+```text
+parkshare/
+├── backend/                       # Python FastAPI Backend
+│   ├── database.py                # SQLAlchemy engine & SQLite session
+│   ├── models.py                  # User, Vehicle, Listing, Booking models
+│   ├── schemas.py                 # Pydantic v2 request/response schemas
+│   ├── services/
+│   │   ├── pricing.py             # Indian marketplace fee calculations (GST, TDS)
+│   │   └── geo.py                 # Spherical Haversine distance calculator
+│   ├── main.py                    # FastAPI app, CORS, routes & seed endpoint
+│   ├── run.py                     # Uvicorn server launcher
+│   └── requirements.txt           # Python dependencies
+├── src/                           # Next.js 14 Frontend
+│   ├── app/                       # App Router views (Explore, Host, Pass, Admin)
+│   ├── components/                # Leaflet map, checkout modal, gate pass
+│   └── lib/                       # Types, utilities & storage
+├── next.config.mjs                # Next.js config with proxy rewrites to FastAPI
+└── README.md
+```
 
 ---
 
@@ -18,6 +42,7 @@ Built with **Next.js 14 (App Router)**, **TypeScript**, **Tailwind CSS**, and **
   * 🏡 **Private Driveways** (Independent bungalows with direct road access)
   * 🏢 **Gated Societies** (Apartment complexes with security guard and boom barrier)
   * 🏬 **Commercial Basements** (Retail/Office lots with CCTV & EV charging)
+* **Geospatial Proximity Search:** Spherical Haversine algorithm calculates real-time distance from user coordinates.
 
 ### 2. Digital Parking Entry Pass (The Society Gatekeeper Solution)
 * Automated gate verification pass generated on booking confirmation:
@@ -50,12 +75,22 @@ Built with **Next.js 14 (App Router)**, **TypeScript**, **Tailwind CSS**, and **
 
 ## 🛠️ Running Locally
 
-```bash
-# 1. Navigate to project directory
-cd C:\Users\soham\.gemini\antigravity\scratch\parkshare
+### Option 1: Start the Python FastAPI Backend
 
-# 2. Start development server
+```cmd
+cd /d C:\Users\soham\.gemini\antigravity\scratch\parkshare
+py backend\run.py
+```
+
+* **API Server:** [http://127.0.0.1:8000](http://127.0.0.1:8000)
+* **Interactive Swagger Docs:** [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+* **ReDoc Documentation:** [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
+
+### Option 2: Start the Next.js Frontend
+
+```cmd
+cd /d C:\Users\soham\.gemini\antigravity\scratch\parkshare
 npm.cmd run dev
 ```
 
-Visit [http://localhost:3000](http://localhost:3000) in your browser.
+* **Web Application:** [http://localhost:3000](http://localhost:3000)

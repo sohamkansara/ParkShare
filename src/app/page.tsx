@@ -1,15 +1,41 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Header from '@/components/layout/Header';
+import BottomNav from '@/components/layout/BottomNav';
 import ParkingMap from '@/components/map/ParkingMap';
+import ParkingBottomCard from '@/components/discovery/ParkingBottomCard';
+import SpotDetailsModal from '@/components/discovery/SpotDetailsModal';
 import BookingModal from '@/components/booking/BookingModal';
+import VehicleVaultModal from '@/components/profile/VehicleVaultModal';
 import { ParkingListing, VehicleType, ListingCategory } from '@/lib/types';
 import { getStoredListings } from '@/lib/storage';
+import { calculateDistanceKm } from '@/lib/geo';
 import { 
   Search, Star, ShieldCheck, 
-  MapPin, Car, Zap, CheckCircle2, Navigation, List, Map as MapIcon, RefreshCw
+  MapPin, Car, Zap, Navigation, List, Map as MapIcon, 
+  RefreshCw, SlidersHorizontal, ChevronRight, X, AlertCircle, Footprints
 } from 'lucide-react';
+
+// Landmark presets for quick destination selection
+const QUICK_LANDMARKS: Record<string, { label: string; lat: number; lng: number }[]> = {
+  Bengaluru: [
+    { label: 'Koramangala Sony World', lat: 12.9352, lng: 77.6245 },
+    { label: 'Indiranagar 100ft Rd', lat: 12.9719, lng: 77.6412 },
+    { label: 'HSR Layout Sector 1', lat: 12.9121, lng: 77.6446 },
+  ],
+  Pune: [
+    { label: 'Koregaon Park German Bakery', lat: 18.5362, lng: 73.8940 },
+    { label: 'FC Road Goodluck Cafe', lat: 18.5284, lng: 73.8415 },
+  ],
+  Mumbai: [
+    { label: 'Bandra Hill Road', lat: 19.0544, lng: 72.8267 },
+    { label: 'BKC G Block', lat: 19.0657, lng: 72.8683 },
+  ],
+  'Delhi NCR': [
+    { label: 'DLF Cyber City Gurgaon', lat: 28.4908, lng: 77.0912 },
+  ],
+};
 
 export default function HomePage() {
   const [listings, setListings] = useState<ParkingListing[]>([]);
@@ -18,12 +44,20 @@ export default function HomePage() {
   const [selectedVehicleType, setSelectedVehicleType] = useState<VehicleType | 'ALL'>('ALL');
   const [selectedCategory, setSelectedCategory] = useState<ListingCategory | 'ALL'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Selection states
   const [selectedSpot, setSelectedSpot] = useState<ParkingListing | null>(null);
+  const [selectedDetailsSpot, setSelectedDetailsSpot] = useState<ParkingListing | null>(null);
   const [bookingSpot, setBookingSpot] = useState<ParkingListing | null>(null);
-  const [mobileTab, setMobileTab] = useState<'LIST' | 'MAP'>('LIST');
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [isVehiclesOpen, setIsVehiclesOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<'MAP' | 'LIST'>('MAP');
 
-  // Fetch listings from real backend API with fallback
+  // Geolocation states (Ola/Uber style)
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [locationPermission, setLocationPermission] = useState<'IDLE' | 'LOCATING' | 'GRANTED' | 'DENIED'>('IDLE');
+  const [locationError, setLocationError] = useState<string | null>(null);
+
+  // 1. Fetch Listings from API with fallback
   const fetchListings = useCallback(async () => {
     setLoading(true);
     try {
@@ -35,7 +69,7 @@ export default function HomePage() {
       if (userLocation) {
         params.set('lat', String(userLocation.lat));
         params.set('lng', String(userLocation.lng));
-        params.set('radiusKm', '10');
+        params.set('radiusKm', '15');
       }
 
       const res = await fetch(`/api/listings?${params.toString()}`);
@@ -48,10 +82,9 @@ export default function HomePage() {
         }
       }
     } catch (e) {
-      console.warn('API fetch failed, using local storage cache:', e);
+      console.warn('API fetch failed, falling back to local store:', e);
     }
 
-    // Fallback to local storage
     setListings(getStoredListings());
     setLoading(false);
   }, [selectedCity, selectedVehicleType, selectedCategory, searchQuery, userLocation]);
@@ -60,285 +93,362 @@ export default function HomePage() {
     fetchListings();
   }, [fetchListings]);
 
-  const handleUseMyLocation = () => {
-    if ('geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setUserLocation({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          });
-        },
-        () => {
-          // Default simulated location for Pune Koregaon Park
-          setUserLocation({ lat: 18.5362, lng: 73.8940 });
-        }
-      );
-    } else {
-      setUserLocation({ lat: 18.5362, lng: 73.8940 });
+  // 2. Step 1: Detect Location on Load (Ola/Uber style)
+  const requestUserLocation = useCallback(() => {
+    if (!('geolocation' in navigator)) {
+      setLocationPermission('DENIED');
+      setLocationError('Geolocation is not supported by your browser');
+      return;
     }
+
+    setLocationPermission('LOCATING');
+    setLocationError(null);
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const coords = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        };
+        setUserLocation(coords);
+        setLocationPermission('GRANTED');
+      },
+      (err) => {
+        console.warn('Geolocation denied or timed out:', err);
+        setLocationPermission('DENIED');
+        // Gentle fallback: simulate current position in city center for testing
+        setLocationError('Location access was denied. You can still search or tap quick landmarks.');
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+    );
+  }, []);
+
+  useEffect(() => {
+    requestUserLocation();
+  }, [requestUserLocation]);
+
+  // 3. Calculate distance and sort by proximity
+  const enrichedListings = useMemo(() => {
+    return listings.map((spot) => {
+      let distanceKm = (spot as any).distanceKm;
+      if (distanceKm === undefined && userLocation) {
+        distanceKm = calculateDistanceKm(userLocation.lat, userLocation.lng, spot.lat, spot.lng);
+      }
+      return {
+        ...spot,
+        distanceKm,
+      };
+    }).sort((a, b) => {
+      if (a.distanceKm !== undefined && b.distanceKm !== undefined) {
+        return (a.distanceKm || 0) - (b.distanceKm || 0);
+      }
+      return 0;
+    });
+  }, [listings, userLocation]);
+
+  // Nearest available spot
+  const nearestSpot = enrichedListings.length > 0 ? enrichedListings[0] : null;
+
+  // Auto-select nearest spot initially if nothing is selected
+  useEffect(() => {
+    if (!selectedSpot && nearestSpot) {
+      setSelectedSpot(nearestSpot);
+    }
+  }, [nearestSpot, selectedSpot]);
+
+  // Selected spot index in the sorted list
+  const activeSpot = selectedSpot || nearestSpot;
+  const activeIndex = activeSpot ? enrichedListings.findIndex((s) => s.id === activeSpot.id) + 1 : 1;
+
+  // Cycle through nearby spots
+  const handleNextSpot = () => {
+    if (enrichedListings.length === 0) return;
+    const currentIdx = enrichedListings.findIndex((s) => s.id === activeSpot?.id);
+    const nextIdx = (currentIdx + 1) % enrichedListings.length;
+    setSelectedSpot(enrichedListings[nextIdx]);
+  };
+
+  const handlePrevSpot = () => {
+    if (enrichedListings.length === 0) return;
+    const currentIdx = enrichedListings.findIndex((s) => s.id === activeSpot?.id);
+    const prevIdx = (currentIdx - 1 + enrichedListings.length) % enrichedListings.length;
+    setSelectedSpot(enrichedListings[prevIdx]);
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-slate-50">
-      <Header selectedCity={selectedCity} onCityChange={(city) => {
-        setSelectedCity(city);
-        setUserLocation(null);
-      }} />
+    <div className="relative w-full h-screen overflow-hidden flex flex-col bg-slate-900 font-sans select-none">
+      {/* Global Navigation Header (Desktop / Tablet) */}
+      <Header
+        selectedCity={selectedCity}
+        onCityChange={(city) => {
+          setSelectedCity(city);
+          setSelectedSpot(null);
+        }}
+        onOpenVehicles={() => setIsVehiclesOpen(true)}
+      />
 
-      {/* Sub-header Filter Bar */}
-      <div className="bg-white border-b border-slate-200 py-3 px-4 sm:px-6 lg:px-8 shadow-sm sticky top-16 z-40">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row gap-3 items-center justify-between">
-          {/* Search Input */}
-          <div className="relative w-full md:w-80">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-            <input
-              type="text"
-              placeholder={`Search in ${selectedCity} (e.g. Koramangala, FC Rd)`}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-slate-50 focus:bg-white"
-            />
+      {/* Floating Top Search & Filter Bar (Ola/Uber style) */}
+      <div className="absolute top-20 sm:top-20 left-4 right-4 z-[400] max-w-xl mx-auto flex flex-col gap-2 pointer-events-none">
+        {/* Search Bar Container */}
+        <div className="pointer-events-auto bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200/90 p-2 flex items-center gap-2">
+          <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+            <Search className="w-4 h-4" />
           </div>
-
-          {/* Filters row */}
-          <div className="flex items-center gap-2 overflow-x-auto w-full md:w-auto pb-1 md:pb-0 scrollbar-none">
-            {/* GPS Radius Filter Button */}
+          <input
+            type="text"
+            placeholder={`Where do you need parking in ${selectedCity}?`}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="flex-1 bg-transparent text-xs sm:text-sm font-semibold text-slate-900 placeholder:text-slate-400 focus:outline-none"
+          />
+          {searchQuery && (
             <button
-              onClick={handleUseMyLocation}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 border ${
-                userLocation
-                  ? 'bg-emerald-600 text-white border-emerald-600'
-                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-              }`}
-              title="Filter by distance from my location"
+              onClick={() => setSearchQuery('')}
+              className="p-1 text-slate-400 hover:text-slate-600 rounded-full"
             >
-              <Navigation className="w-3.5 h-3.5" />
-              <span>{userLocation ? 'Near Me (Active)' : 'Near Me'}</span>
+              <X className="w-4 h-4" />
             </button>
+          )}
 
-            {/* Vehicle Type Filter */}
-            <div className="flex items-center bg-slate-100 p-1 rounded-xl shrink-0">
-              <button
-                onClick={() => setSelectedVehicleType('ALL')}
-                className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
-                  selectedVehicleType === 'ALL'
-                    ? 'bg-white text-slate-900 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                All
-              </button>
-              <button
-                onClick={() => setSelectedVehicleType('TWO_WHEELER')}
-                className={`px-3 py-1 text-xs font-bold rounded-lg transition-all flex items-center gap-1 ${
-                  selectedVehicleType === 'TWO_WHEELER'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <span>🏍️</span>
-                <span>2-Wheeler</span>
-              </button>
-              <button
-                onClick={() => setSelectedVehicleType('HATCHBACK')}
-                className={`px-3 py-1 text-xs font-bold rounded-lg transition-all flex items-center gap-1 ${
-                  selectedVehicleType === 'HATCHBACK'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <span>🚗</span>
-                <span>Car</span>
-              </button>
-              <button
-                onClick={() => setSelectedVehicleType('SUV')}
-                className={`px-3 py-1 text-xs font-bold rounded-lg transition-all flex items-center gap-1 ${
-                  selectedVehicleType === 'SUV'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <span>🚙</span>
-                <span>SUV</span>
-              </button>
-            </div>
-
-            {/* Category Filter */}
-            <select
-              value={selectedCategory}
-              onChange={(e) => setSelectedCategory(e.target.value as any)}
-              className="bg-slate-100 text-xs font-semibold text-slate-700 py-1.5 px-3 rounded-xl border-none focus:ring-2 focus:ring-emerald-500 shrink-0"
-            >
-              <option value="ALL">All Categories</option>
-              <option value="RESIDENTIAL_DRIVEWAY">🏡 Private Driveway</option>
-              <option value="GATED_SOCIETY">🏢 Gated Society (Pass)</option>
-              <option value="COMMERCIAL_BASEMENT">🏬 Commercial Basement</option>
-            </select>
-
-            {/* Mobile View Toggle */}
-            <div className="flex md:hidden bg-slate-100 p-1 rounded-xl ml-auto shrink-0">
-              <button
-                onClick={() => setMobileTab('LIST')}
-                className={`p-1.5 rounded-lg ${mobileTab === 'LIST' ? 'bg-white text-emerald-600 shadow' : 'text-slate-500'}`}
-              >
-                <List className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setMobileTab('MAP')}
-                className={`p-1.5 rounded-lg ${mobileTab === 'MAP' ? 'bg-white text-emerald-600 shadow' : 'text-slate-500'}`}
-              >
-                <MapIcon className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
+          {/* View Switcher: Map vs List */}
+          <button
+            onClick={() => setViewMode(viewMode === 'MAP' ? 'LIST' : 'MAP')}
+            className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-colors shrink-0"
+            title="Toggle between Map and List view"
+          >
+            {viewMode === 'MAP' ? <List className="w-4 h-4" /> : <MapIcon className="w-4 h-4" />}
+          </button>
         </div>
+
+        {/* Quick Filter Pills Row */}
+        <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
+          {/* Vehicle Filters */}
+          <button
+            onClick={() => setSelectedVehicleType('ALL')}
+            className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 backdrop-blur-md shadow-sm border ${
+              selectedVehicleType === 'ALL'
+                ? 'bg-slate-900 text-white border-slate-900'
+                : 'bg-white/95 text-slate-700 border-slate-200 hover:bg-white'
+            }`}
+          >
+            All
+          </button>
+
+          <button
+            onClick={() => setSelectedVehicleType('TWO_WHEELER')}
+            className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 flex items-center gap-1 backdrop-blur-md shadow-sm border ${
+              selectedVehicleType === 'TWO_WHEELER'
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white/95 text-slate-700 border-slate-200 hover:bg-white'
+            }`}
+          >
+            <span>🏍️</span>
+            <span>2-Wheeler</span>
+          </button>
+
+          <button
+            onClick={() => setSelectedVehicleType('HATCHBACK')}
+            className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 flex items-center gap-1 backdrop-blur-md shadow-sm border ${
+              selectedVehicleType === 'HATCHBACK'
+                ? 'bg-emerald-600 text-white border-emerald-600'
+                : 'bg-white/95 text-slate-700 border-slate-200 hover:bg-white'
+            }`}
+          >
+            <span>🚗</span>
+            <span>Car</span>
+          </button>
+
+          <button
+            onClick={() => setSelectedVehicleType('SUV')}
+            className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 flex items-center gap-1 backdrop-blur-md shadow-sm border ${
+              selectedVehicleType === 'SUV'
+                ? 'bg-emerald-600 text-white border-emerald-600'
+                : 'bg-white/95 text-slate-700 border-slate-200 hover:bg-white'
+            }`}
+          >
+            <span>🚙</span>
+            <span>SUV</span>
+          </button>
+
+          {/* Category Dropdown Pill */}
+          <select
+            value={selectedCategory}
+            onChange={(e) => setSelectedCategory(e.target.value as any)}
+            className="bg-white/95 backdrop-blur-md text-slate-700 text-xs font-bold py-1.5 px-3 rounded-full border border-slate-200 shadow-sm focus:outline-none shrink-0 cursor-pointer"
+          >
+            <option value="ALL">All Spaces</option>
+            <option value="RESIDENTIAL_DRIVEWAY">🏡 Private Driveway</option>
+            <option value="GATED_SOCIETY">🏢 Society Pass</option>
+            <option value="COMMERCIAL_BASEMENT">🏬 Basement Bay</option>
+          </select>
+        </div>
+
+        {/* Quick Landmark Chips (If no search query) */}
+        {!searchQuery && QUICK_LANDMARKS[selectedCity] && (
+          <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto no-scrollbar hidden sm:flex">
+            {QUICK_LANDMARKS[selectedCity].map((lm) => (
+              <button
+                key={lm.label}
+                onClick={() => {
+                  setUserLocation({ lat: lm.lat, lng: lm.lng });
+                  setSelectedSpot(null);
+                }}
+                className="px-2.5 py-1 rounded-lg bg-slate-900/80 backdrop-blur text-white text-[11px] font-semibold hover:bg-slate-900 transition-colors shadow shrink-0 flex items-center gap-1"
+              >
+                <MapPin className="w-3 h-3 text-emerald-400" />
+                <span>{lm.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Location Notice (Dismissible) */}
+        {locationError && (
+          <div className="pointer-events-auto p-2 bg-amber-500/95 backdrop-blur text-slate-950 text-xs font-semibold rounded-xl shadow-lg flex items-center justify-between gap-2 border border-amber-300">
+            <div className="flex items-center gap-1.5">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{locationError}</span>
+            </div>
+            <button
+              onClick={() => setLocationError(null)}
+              className="text-slate-950 hover:text-white text-xs font-bold"
+            >
+              ✕
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Main Split Body */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col md:flex-row gap-6 h-[calc(100vh-140px)]">
-        {/* Left Column: Listing Cards */}
-        <div
-          className={`w-full md:w-1/2 lg:w-5/12 overflow-y-auto pr-1 space-y-4 ${
-            mobileTab === 'MAP' ? 'hidden md:block' : 'block'
-          }`}
-        >
-          <div className="flex items-center justify-between text-xs text-slate-500 px-1">
-            <span className="font-semibold text-slate-800 flex items-center gap-1.5">
-              {loading && <RefreshCw className="w-3 h-3 animate-spin text-emerald-600" />}
-              {listings.length} verified parking {listings.length === 1 ? 'spot' : 'spots'} found
-            </span>
-            <span>Live DB Sync</span>
-          </div>
+      {/* Main Experience Body (Full-bleed Map or List Drawer) */}
+      <main className="relative flex-1 w-full h-full overflow-hidden">
+        {/* The Primary Leaflet Map Screen */}
+        <div className="w-full h-full">
+          <ParkingMap
+            listings={enrichedListings}
+            selectedSpot={activeSpot}
+            nearestSpotId={nearestSpot?.id}
+            onSelectSpot={(spot) => setSelectedSpot(spot)}
+            selectedCity={selectedCity}
+            userLocation={userLocation}
+            onLocateMe={requestUserLocation}
+          />
+        </div>
 
-          {listings.length === 0 ? (
-            <div className="p-8 text-center bg-white rounded-3xl border border-slate-200 space-y-3 mt-4">
-              <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
-                <Search className="w-6 h-6" />
-              </div>
-              <p className="text-sm font-bold text-slate-800">No parking spots found</p>
-              <p className="text-xs text-slate-500 max-w-xs mx-auto">
-                Try expanding your search query or vehicle filter in {selectedCity}.
-              </p>
+        {/* Floating Bottom Parking Preview Card (Ola/Uber style) */}
+        {viewMode === 'MAP' && activeSpot && (
+          <div className="absolute bottom-20 sm:bottom-6 left-4 right-4 z-[400] max-w-lg mx-auto pointer-events-auto">
+            <ParkingBottomCard
+              spot={activeSpot}
+              isNearest={activeSpot.id === nearestSpot?.id}
+              onViewDetails={(spot) => setSelectedDetailsSpot(spot)}
+              onBookNow={(spot) => setBookingSpot(spot)}
+              onNextSpot={handleNextSpot}
+              onPrevSpot={handlePrevSpot}
+              totalNearbyCount={enrichedListings.length}
+              currentIndex={activeIndex}
+            />
+          </div>
+        )}
+
+        {/* Full List View Drawer (When toggled to List) */}
+        {viewMode === 'LIST' && (
+          <div className="absolute inset-0 z-[400] bg-slate-50 overflow-y-auto p-4 pt-44 pb-28 max-w-2xl mx-auto shadow-2xl">
+            <div className="flex items-center justify-between mb-3 px-1">
+              <h2 className="text-sm font-black text-slate-900 uppercase tracking-wide">
+                Nearby Parking ({enrichedListings.length})
+              </h2>
               <button
-                onClick={() => {
-                  setSelectedVehicleType('ALL');
-                  setSelectedCategory('ALL');
-                  setSearchQuery('');
-                  setUserLocation(null);
-                }}
-                className="px-4 py-2 bg-emerald-600 text-white font-bold rounded-xl text-xs hover:bg-emerald-700"
+                onClick={() => setViewMode('MAP')}
+                className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200"
               >
-                Reset All Filters
+                Back to Map
               </button>
             </div>
-          ) : (
-            listings.map((spot: any) => {
-              const isSelected = selectedSpot?.id === spot.id;
-              return (
+
+            <div className="space-y-3">
+              {enrichedListings.map((spot, i) => (
                 <div
                   key={spot.id}
-                  onClick={() => setSelectedSpot(spot)}
-                  className={`p-4 rounded-3xl bg-white border transition-all cursor-pointer ${
-                    isSelected
+                  onClick={() => {
+                    setSelectedSpot(spot);
+                    setViewMode('MAP');
+                  }}
+                  className={`p-4 rounded-3xl bg-white border cursor-pointer transition-all ${
+                    spot.id === activeSpot?.id
                       ? 'border-emerald-600 ring-2 ring-emerald-600/20 shadow-md'
-                      : 'border-slate-200 hover:border-slate-300 hover:shadow-sm'
+                      : 'border-slate-200 hover:border-slate-300'
                   }`}
                 >
-                  <div className="flex gap-4">
-                    {/* Image Thumbnail */}
-                    <div className="relative w-28 h-28 rounded-2xl overflow-hidden bg-slate-100 shrink-0">
+                  <div className="flex gap-3.5 items-center">
+                    <div className="relative w-20 h-20 rounded-2xl overflow-hidden bg-slate-100 shrink-0">
                       {spot.images && spot.images[0] ? (
-                        <img
-                          src={spot.images[0]}
-                          alt={spot.title}
-                          className="w-full h-full object-cover"
-                        />
+                        <img src={spot.images[0]} alt={spot.title} className="w-full h-full object-cover" />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-slate-400">
-                          <Car className="w-8 h-8" />
+                          <Car className="w-6 h-6" />
                         </div>
                       )}
-                      <div className="absolute top-2 left-2 bg-slate-900/80 backdrop-blur text-white text-[10px] font-black px-2 py-0.5 rounded-full">
-                        ₹{spot.hourlyRate}/hr
+                      <div className="absolute top-1.5 left-1.5 bg-slate-900/90 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full">
+                        ₹{spot.hourlyRate}/h
                       </div>
                     </div>
 
-                    {/* Details */}
-                    <div className="flex-1 min-w-0 flex flex-col justify-between">
-                      <div>
-                        <div className="flex items-center justify-between gap-1 mb-1">
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700 uppercase tracking-wide">
-                            {spot.category.replace('_', ' ')}
-                          </span>
-                          <div className="flex items-center gap-1 text-xs font-bold text-slate-800">
-                            <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
-                            <span>{spot.rating}</span>
-                            <span className="text-[10px] text-slate-400">({spot.reviewCount})</span>
-                          </div>
-                        </div>
-
-                        <h4 className="text-sm font-bold text-slate-900 truncate leading-snug">
-                          {spot.title}
-                        </h4>
-                        <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5 truncate">
-                          <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                          <span>{spot.locality}, {spot.city}</span>
-                          {spot.distanceKm !== undefined && spot.distanceKm !== null && (
-                            <span className="ml-1 text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.2 rounded text-[10px]">
-                              {spot.distanceKm} km away
-                            </span>
-                          )}
-                        </p>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-1 mb-1">
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 uppercase">
+                          {spot.category.replace('_', ' ')}
+                        </span>
+                        <span className="text-xs font-bold text-slate-900 flex items-center gap-1">
+                          <Star className="w-3 h-3 text-amber-500 fill-amber-500" />
+                          {spot.rating}
+                        </span>
                       </div>
+                      <h3 className="text-sm font-bold text-slate-900 truncate">{spot.title}</h3>
+                      <p className="text-xs text-slate-500 truncate">{spot.address}</p>
 
-                      {/* Amenities and Book Button */}
-                      <div className="flex items-center justify-between pt-2 mt-2 border-t border-slate-100">
-                        <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                          {spot.amenities?.includes('COVERED') && <span>🛡️ Covered</span>}
-                          {spot.amenities?.includes('EV_CHARGING') && <span>⚡ EV</span>}
-                          {spot.category === 'GATED_SOCIETY' && (
-                            <span className="text-emerald-700 font-medium">🏢 Society Pass</span>
-                          )}
-                        </div>
-
+                      <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100">
+                        {spot.distanceKm !== undefined && (
+                          <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1">
+                            <Footprints className="w-3 h-3" />
+                            {spot.distanceKm < 1 ? `${Math.round(spot.distanceKm * 1000)}m` : `${spot.distanceKm} km`}
+                          </span>
+                        )}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            setBookingSpot(spot);
+                            setSelectedDetailsSpot(spot);
                           }}
-                          className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all"
+                          className="text-xs font-bold text-slate-700 hover:text-emerald-700"
                         >
-                          Book Now
+                          View Details →
                         </button>
                       </div>
                     </div>
                   </div>
                 </div>
-              );
-            })
-          )}
-        </div>
-
-        {/* Right Column: Interactive Leaflet Map */}
-        <div
-          className={`w-full md:w-1/2 lg:w-7/12 h-full min-h-[400px] ${
-            mobileTab === 'LIST' ? 'hidden md:block' : 'block'
-          }`}
-        >
-          <ParkingMap
-            listings={listings}
-            selectedSpot={selectedSpot}
-            onSelectSpot={(spot) => {
-              setSelectedSpot(spot);
-              setMobileTab('LIST');
-            }}
-            selectedCity={selectedCity}
-          />
-        </div>
+              ))}
+            </div>
+          </div>
+        )}
       </main>
 
-      {/* Booking Checkout Modal */}
+      {/* Mobile-First Bottom Navigation Bar */}
+      <BottomNav onOpenVehicles={() => setIsVehiclesOpen(true)} />
+
+      {/* Airbnb-Inspired Spot Details Page Modal */}
+      {selectedDetailsSpot && (
+        <SpotDetailsModal
+          spot={selectedDetailsSpot}
+          userLocation={userLocation}
+          onClose={() => setSelectedDetailsSpot(null)}
+          onBookNow={(spot) => {
+            setSelectedDetailsSpot(null);
+            setBookingSpot(spot);
+          }}
+        />
+      )}
+
+      {/* Booking Checkout Modal (With Atomic Backend Verification) */}
       {bookingSpot && (
         <BookingModal
           spot={bookingSpot}
@@ -347,6 +457,11 @@ export default function HomePage() {
             fetchListings();
           }}
         />
+      )}
+
+      {/* Vehicle Vault Modal */}
+      {isVehiclesOpen && (
+        <VehicleVaultModal onClose={() => setIsVehiclesOpen(false)} />
       )}
     </div>
   );

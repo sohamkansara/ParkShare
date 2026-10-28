@@ -3,6 +3,8 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Header from '@/components/layout/Header';
+import BottomNav from '@/components/layout/BottomNav';
+import VehicleVaultModal from '@/components/profile/VehicleVaultModal';
 import { ParkingListing, Booking } from '@/lib/types';
 import { getStoredListings, getStoredBookings, saveListing } from '@/lib/storage';
 import { formatINR } from '@/lib/pricing';
@@ -14,6 +16,7 @@ import {
 export default function HostHubPage() {
   const [listings, setListings] = useState<ParkingListing[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [showVehicles, setShowVehicles] = useState(false);
 
   useEffect(() => {
     setListings(getStoredListings());
@@ -44,9 +47,9 @@ export default function HostHubPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
-      <Header />
+      <Header onOpenVehicles={() => setShowVehicles(true)} />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-24 md:pb-8 space-y-8">
         {/* Hub Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
@@ -253,6 +256,9 @@ export default function HostHubPage() {
           </div>
         </section>
       </main>
+
+      <BottomNav onOpenVehicles={() => setShowVehicles(true)} />
+      <VehicleVaultModal isOpen={showVehicles} onClose={() => setShowVehicles(false)} />
     </div>
   );
 }

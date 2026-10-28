@@ -3,6 +3,8 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Header from '@/components/layout/Header';
+import BottomNav from '@/components/layout/BottomNav';
+import VehicleVaultModal from '@/components/profile/VehicleVaultModal';
 import { Booking } from '@/lib/types';
 import { getStoredBookings } from '@/lib/storage';
 import { formatINR } from '@/lib/pricing';
@@ -13,6 +15,7 @@ import {
 
 export default function BookingsPage() {
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [isVehiclesOpen, setIsVehiclesOpen] = useState(false);
 
   useEffect(() => {
     setBookings(getStoredBookings());
@@ -25,12 +28,12 @@ export default function BookingsPage() {
   const pastBookings = bookings.filter(b => b.status === 'COMPLETED' || b.status === 'CANCELLED' || b.status === 'DISPUTED');
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      <Header />
+    <div className="min-h-screen bg-slate-50 flex flex-col pb-20 sm:pb-8">
+      <Header onOpenVehicles={() => setIsVehiclesOpen(true)} />
 
-      <main className="flex-1 max-w-4xl w-full mx-auto px-4 sm:px-6 py-8 space-y-8">
+      <main className="flex-1 max-w-4xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6 sm:space-y-8">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">My Parking Passes & Bookings</h1>
+          <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">My Parking Passes & Bookings</h1>
           <p className="text-xs text-slate-500 mt-1">
             Access your society entry codes, GPS check-ins, and past parking receipts.
           </p>
@@ -159,6 +162,14 @@ export default function BookingsPage() {
           </section>
         )}
       </main>
+
+      {/* Mobile-First Bottom Navigation Bar */}
+      <BottomNav onOpenVehicles={() => setIsVehiclesOpen(true)} />
+
+      {/* Vehicle Vault Modal */}
+      {isVehiclesOpen && (
+        <VehicleVaultModal onClose={() => setIsVehiclesOpen(false)} />
+      )}
     </div>
   );
 }

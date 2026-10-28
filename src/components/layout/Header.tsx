@@ -3,16 +3,17 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Shield, Car, Home, Compass, Calendar, PlusCircle, CheckCircle2 } from 'lucide-react';
+import { Shield, Car, Home, Compass, Calendar, PlusCircle } from 'lucide-react';
 import { UserRole } from '@/lib/types';
 import { getStoredRole, setStoredRole, getStoredBookings } from '@/lib/storage';
 
 interface HeaderProps {
   selectedCity?: string;
   onCityChange?: (city: 'Bengaluru' | 'Pune' | 'Mumbai' | 'Delhi NCR') => void;
+  onOpenVehicles?: () => void;
 }
 
-export default function Header({ selectedCity = 'Bengaluru', onCityChange }: HeaderProps) {
+export default function Header({ selectedCity = 'Bengaluru', onCityChange, onOpenVehicles }: HeaderProps) {
   const pathname = usePathname();
   const [role, setRole] = useState<UserRole>('DRIVER');
   const [activeBookingCount, setActiveBookingCount] = useState(0);
@@ -69,7 +70,7 @@ export default function Header({ selectedCity = 'Bengaluru', onCityChange }: Hea
                   value={selectedCity}
                   onChange={(e) => onCityChange(e.target.value as any)}
                   aria-label="Select City"
-                  className="bg-slate-100 text-xs font-semibold text-slate-800 rounded-lg px-3 py-1.5 border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="bg-slate-100 text-xs font-semibold text-slate-800 rounded-lg px-3 py-1.5 border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
                 >
                   <option value="Bengaluru">📍 Bengaluru (Koramangala, Indiranagar)</option>
                   <option value="Pune">📍 Pune (Koregaon Park, FC Road)</option>
@@ -112,6 +113,16 @@ export default function Header({ selectedCity = 'Bengaluru', onCityChange }: Hea
               )}
             </Link>
 
+            {onOpenVehicles && (
+              <button
+                onClick={onOpenVehicles}
+                className="hidden sm:flex items-center space-x-1.5 text-xs font-semibold px-3 py-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors"
+              >
+                <Car className="w-4 h-4" />
+                <span>My Vehicles</span>
+              </button>
+            )}
+
             {/* Host Dashboard Link */}
             <Link
               href="/host"
@@ -145,7 +156,7 @@ export default function Header({ selectedCity = 'Bengaluru', onCityChange }: Hea
                   className="flex items-center space-x-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
                 >
                   <PlusCircle className="w-4 h-4" />
-                  <span>List Your Space</span>
+                  <span>List Space</span>
                 </Link>
               ) : (
                 <button
@@ -153,7 +164,7 @@ export default function Header({ selectedCity = 'Bengaluru', onCityChange }: Hea
                   className="flex items-center space-x-1.5 text-xs font-semibold px-3 py-2 rounded-lg border border-emerald-600 text-emerald-700 hover:bg-emerald-50 transition-all"
                 >
                   <Car className="w-4 h-4" />
-                  <span>Switch to Driver</span>
+                  <span>Driver Mode</span>
                 </button>
               )}
             </div>
